@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from importlib import resources
 import gc
 import json
 import os
@@ -106,6 +107,10 @@ def main():
     D = D[D["splitID"].astype(str).isin(args.splits)].copy()
     D = D.sort_values("bankID").reset_index(drop=True)
 
+    asset_ref = resources.files("ris_env").joinpath("assets/gg_q05_lookup.npz")
+    with resources.as_file(asset_ref) as lookup_path:
+        lookup_sha256 = sha256_file(lookup_path)
+
     spec = make_generation_spec(
         environment_csv=env_path,
         n_mc=args.n_mc,
@@ -114,6 +119,7 @@ def main():
         w_chunk=args.w_chunk,
         z_chunk=args.z_chunk,
         banks_per_shard=args.banks_per_shard,
+        gg_lookup_sha256=lookup_sha256,
     )
     plans = [
         x for x in plan_shards(D, banks_per_shard=args.banks_per_shard)
@@ -251,6 +257,12 @@ def main():
                     raise RuntimeError(f"bankID={bank_id}: non-finite logQ05GG.")
                 if not (frame["q05GG"].to_numpy() > 0).all():
                     raise RuntimeError(f"bankID={bank_id}: non-positive q05GG.")
+                if bool(frame["lookupClamped"].astype(bool).any()):
+                    cv2_max=float(frame.loc[frame["lookupClamped"].astype(bool),"cv2"].max())
+                    raise RuntimeError(
+                        f"bankID={bank_id}: GG lookup clamp detected (max CV2={cv2_max:.6g}). "
+                        "Production generation stops instead of writing clipped labels."
+                    )
 
                 table = pa.Table.from_pandas(frame, preserve_index=False)
                 if writer is None:
@@ -282,7 +294,7 @@ def main():
                     "peakMemory_MB": peak,
                 })
 
-                total_done_est = len(completed) + processed_this_run
+                total_done_est = len(completed) + j
                 total_target = len(D)
                 avg = float(np.mean(bank_times[-20:]))
                 eta = avg * max(total_target - total_done_est, 0)

@@ -751,6 +751,7 @@ def empirical_mean_variance_multi_w_z(
 class TorchGGQ05Lookup:
     log_cv2: torch.Tensor
     qnorm: torch.Tensor
+    legacy_linear_max: Optional[torch.Tensor] = None
 
 
 def torch_gg_lookup(
@@ -760,6 +761,11 @@ def torch_gg_lookup(
     dtype=torch.float64,
 ) -> TorchGGQ05Lookup:
     dev=_device(device)
+    bp = (
+        None
+        if lookup.legacy_linear_max is None
+        else torch.as_tensor(lookup.legacy_linear_max,dtype=dtype,device=dev)
+    )
     return TorchGGQ05Lookup(
         log_cv2=torch.as_tensor(
             lookup.log_cv2,dtype=dtype,device=dev
@@ -767,6 +773,7 @@ def torch_gg_lookup(
         qnorm=torch.as_tensor(
             lookup.qnorm,dtype=dtype,device=dev
         ),
+        legacy_linear_max=bp,
     )
 
 
@@ -807,6 +814,14 @@ def symmetric_gg_q05_torch(
 
     t=(xc-x0)/torch.clamp(x1-x0,min=tiny)
     qnorm=y0+t*(y1-y0)
+
+    if lookup.legacy_linear_max is not None:
+        ext=xc > lookup.legacy_linear_max
+        logy0=torch.log(torch.clamp(y0,min=tiny))
+        logy1=torch.log(torch.clamp(y1,min=tiny))
+        qnorm_tail=torch.exp(logy0+t*(logy1-logy0))
+        qnorm=torch.where(ext,qnorm_tail,qnorm)
+
     q05=mu_safe*qnorm
 
     # Symmetric Gamma-Gamma shape a=b.

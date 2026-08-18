@@ -50,7 +50,7 @@ from __future__ import annotations
 # docs/VALIDATION_STATUS.md before changing equations or tensor conventions.
 
 from dataclasses import dataclass
-from typing import Dict, Any, Iterable, Sequence
+from typing import Dict, Any, Iterable, Sequence, Optional
 import time
 
 import numpy as np
@@ -98,6 +98,10 @@ DEFAULT_CASES = (
 class GGQ05Lookup:
     log_cv2: np.ndarray
     qnorm: np.ndarray
+    # None => legacy interpolation is linear in qNorm over the whole grid.
+    # Packaged v2 lookup sets this to the old maximum log(CV^2): values above
+    # that breakpoint use log(qNorm) interpolation for stable tail accuracy.
+    legacy_linear_max: Optional[float] = None
 
     def __post_init__(self):
         self.log_cv2 = np.asarray(self.log_cv2,dtype=np.float64).reshape(-1)
@@ -106,8 +110,12 @@ class GGQ05Lookup:
             raise ValueError("Invalid GG lookup sizes.")
         if not np.all(np.diff(self.log_cv2) > 0):
             raise ValueError("log_cv2 must be strictly increasing.")
-        if not np.all(np.isfinite(self.qnorm)) or np.any(self.qnorm < 0):
-            raise ValueError("qnorm must be finite and nonnegative.")
+        if not np.all(np.isfinite(self.qnorm)) or np.any(self.qnorm <= 0):
+            raise ValueError("qnorm must be finite and positive.")
+        if self.legacy_linear_max is not None:
+            self.legacy_linear_max = float(self.legacy_linear_max)
+            if not (self.log_cv2[0] <= self.legacy_linear_max <= self.log_cv2[-1]):
+                raise ValueError("legacy_linear_max must lie inside lookup grid.")
 
     @property
     def cv2_min(self):
@@ -190,13 +198,30 @@ def symmetric_gg_q05_numpy(
     logcv=np.full(mu_b.shape,np.nan,dtype=np.float64)
     logcv[valid]=np.log(var_b[valid]/(mu_b[valid]**2))
 
+    xv=logcv[valid]
     norm=np.interp(
-        logcv[valid],
+        xv,
         lookup.log_cv2,
         lookup.qnorm,
         left=lookup.qnorm[0],
         right=lookup.qnorm[-1],
     )
+
+    # Preserve the old Teacher exactly on its validated support.  The new
+    # high-CV^2 tail spans many decades in qNorm, so linear interpolation in
+    # qNorm is numerically poor there.  Above the legacy breakpoint we
+    # interpolate log(qNorm) versus log(CV^2).
+    if lookup.legacy_linear_max is not None:
+        ext=xv > lookup.legacy_linear_max
+        if np.any(ext):
+            norm[ext]=np.exp(np.interp(
+                xv[ext],
+                lookup.log_cv2,
+                np.log(lookup.qnorm),
+                left=np.log(lookup.qnorm[0]),
+                right=np.log(lookup.qnorm[-1]),
+            ))
+
     q[valid]=mu_b[valid]*norm
 
     clamped=valid & (

@@ -61,9 +61,15 @@ def load_packaged_gg_lookup() -> GGQ05Lookup:
     asset = resources.files("ris_env").joinpath("assets/gg_q05_lookup.npz")
     with resources.as_file(asset) as p:
         x = np.load(p)
+        legacy_max=(
+            float(np.asarray(x["legacy_linear_max"]).reshape(()))
+            if "legacy_linear_max" in x.files
+            else None
+        )
         return GGQ05Lookup(
             log_cv2=np.asarray(x["log_cv2"], dtype=np.float64),
             qnorm=np.asarray(x["qnorm"], dtype=np.float64),
+            legacy_linear_max=legacy_max,
         )
 
 

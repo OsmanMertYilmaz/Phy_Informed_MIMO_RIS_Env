@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 
-DATASET_SCHEMA_VERSION = "teacher_q05gg_v1"
+DATASET_SCHEMA_VERSION = "teacher_q05gg_v2"
 
 
 def sha256_file(path: str | Path, block_size: int = 1024 * 1024) -> str:
@@ -57,6 +57,7 @@ def make_generation_spec(
     w_chunk: int,
     z_chunk: int,
     banks_per_shard: int,
+    gg_lookup_sha256: str,
 ) -> Dict[str, Any]:
     environment_csv = Path(environment_csv)
     spec = {
@@ -70,6 +71,7 @@ def make_generation_spec(
         "w_chunk": int(w_chunk),
         "z_chunk": int(z_chunk),
         "banks_per_shard": int(banks_per_shard),
+        "gg_lookup_sha256": str(gg_lookup_sha256),
         "target": "logQ05GG",
         "q05_definition": "symmetric_gamma_gamma(analytic_muSNR,varEmp_MC)",
     }
