@@ -17,14 +17,69 @@ environments:
     LOS_NLOS: 250
     NLOS_LOS: 250
     NLOS_NLOS: 250
-  geometry_split: controlled_interpolation
+  geometry_split: controlled_interpolation_10x10_cells
+
+geometry:
+  families:
+    Indoor-Office:
+      dist_BR_m: [5.0, 45.0]
+      dist_RU_m: [3.0, 35.0]
+      gnb_height_m: [2.3, 4.0]
+      ue_height_m: [1.0, 2.2]
+    UMi:
+      dist_BR_m: [30.0, 250.0]
+      dist_RU_m: [10.0, 180.0]
+      gnb_height_m: [10.0, 22.0]
+      ue_height_m: [1.2, 3.0]
+    UMa:
+      dist_BR_m: [70.0, 500.0]
+      dist_RU_m: [35.0, 300.0]
+      gnb_height_m: [25.0, 35.0]
+      ue_height_m: [1.2, 3.0]
+    RMa:
+      dist_BR_m: [150.0, 1200.0]
+      dist_RU_m: [50.0, 800.0]
+      gnb_height_m: [25.0, 50.0]
+      ue_height_m: [1.2, 3.5]
+  distance_bins_per_link: 10
+  banks_per_geometry_cell: 10
+  ris_position_m: [0.0, 0.0, 0.0]
+  require_no_exact_split_geometry_overlap: true
+  require_val_test_inside_train_cell_envelope: true
+
+carrier_frequencies_hz:
+  - 2000000000
+  - 2600000000
+  - 3500000000
+  - 3600000000
+  - 4900000000
+  - 6000000000
 
 arrays:
-  nT_min: 4
-  nRIS_values: [64, 128, 256, 512]
-  target_banks_per_nRIS: 1000
   dual_polarization: true
   polarization_angles_deg: [45, -45]
+  nT_min: 4
+  tx_spatial_shapes:
+    - [2, 1]   # nT=4
+    - [2, 2]   # nT=8
+    - [4, 1]   # nT=8, different geometry
+    - [4, 2]   # nT=16
+  rx_spatial_shapes:
+    - [1, 1]   # nR=2
+    - [2, 1]   # nR=4
+    - [2, 2]   # nR=8
+    - [4, 1]   # nR=8, different geometry
+  nRIS_values: [64, 128, 256, 512]
+  target_banks_per_nRIS: 1000
+  canonical_nRIS_shapes:
+    "64": [8, 4]
+    "128": [8, 8]
+    "256": [16, 8]
+    "512": [16, 16]
+
+rng:
+  channel_seed_base: 620000
+  ris_seed: 20260819
 
 candidates_per_bank:
   W: 32
@@ -56,6 +111,7 @@ monte_carlo:
   realizations: 64000
   variance_normalization: population
   channel_rng_native_cuda: true
+  common_random_numbers_across_candidates: true
 
 label:
   distribution: symmetric_gamma_gamma
