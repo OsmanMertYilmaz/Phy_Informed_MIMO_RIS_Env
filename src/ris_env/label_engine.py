@@ -412,7 +412,18 @@ def validate_batched_contraction(
 
 @dataclass
 class MeanOnlyWState:
+    # Minimal Stage-3 state required to reproduce muSNR exactly.
+    #
+    # IMPORTANT:
+    # eff_kernel alone is not sufficient because the validated Stage-3 path
+    # computes
+    #   sigma2 = max(second_eff - |mu|^2, 0)
+    #   muSNR   = sum_r (sigma2 + |mu|^2)
+    # rather than summing raw second_eff.  The distinction matters when the
+    # approximate correlation kernels are slightly non-PSD.
     eff_kernel: torch.Tensor  # [nR,nRIS,nRIS]
+    ubarBR: torch.Tensor      # [nRIS]
+    muRU: torch.Tensor        # [nR,nRIS]
 
 
 def _hermitianize(A: torch.Tensor) -> torch.Tensor:
@@ -479,7 +490,11 @@ def prepare_w_mean_only_state(static_env, w) -> MeanOnlyWState:
         )
         eff_kernel[r]=ARU*UBR
 
-    return MeanOnlyWState(eff_kernel=eff_kernel)
+    return MeanOnlyWState(
+        eff_kernel=eff_kernel,
+        ubarBR=ubar,
+        muRU=env.muRU,
+    )
 
 
 @torch.inference_mode()
@@ -490,13 +505,24 @@ def evaluate_analytic_mu_snr_mean_only(
     z_chunk: int=64,
 ) -> torch.Tensor:
     """
-    analytic muSNR for C gamma candidates, output [C].
+    Analytic muSNR for C gamma candidates, output [C].
 
-    muSNR = sum_r E|Feff_r|^2
+    This is the lightweight equivalent of the validated Stage-3
+    ``evaluate_gamma_batch`` mean calculation:
+
+        mu        = muFeff
+        second    = E|Feff|^2 from the effective-moment kernel
+        sigma2    = max(second - |mu|^2, 0)
+        muSNR     = sum_r (sigma2 + |mu|^2)
+
+    Do NOT replace this with ``sum(second)``.  The approximate spatial
+    correlation model can produce tiny non-PSD residues; Stage-3 explicitly
+    applies the non-negative variance projection above.
     """
     K=state.eff_kernel
     dev=K.device
     cd=K.dtype
+    rd=K.real.dtype
 
     g=torch.as_tensor(gamma,dtype=cd,device=dev)
     if g.ndim==1:
@@ -505,18 +531,34 @@ def evaluate_analytic_mu_snr_mean_only(
     C,I=g.shape
     if K.shape[-1]!=I:
         raise ValueError("gamma / eff_kernel nRIS mismatch.")
+    if state.ubarBR.numel()!=I:
+        raise ValueError("ubarBR / gamma nRIS mismatch.")
 
-    out=torch.empty(C,dtype=K.real.dtype,device=dev)
+    out=torch.empty(C,dtype=rd,device=dev)
 
     for c0 in range(0,C,z_chunk):
         c1=min(c0+z_chunk,C)
         gc=g[c0:c1]
 
-        # q[c,r] = gamma_c^T K_r conj(gamma_c)
-        # Use [r,c,i] temporary, no [C,I,I] tensor.
+        # Exact Stage-3 / MATLAB convention:
+        # muLayer = muRU * (gamma .* ubarBR)
+        mu=(gc*state.ubarBR[None,:]) @ state.muRU.T
+
+        # second_eff[c,r] = gamma^T K_r conj(gamma)
         y=torch.einsum("ci,rin->rcn",gc,K)
-        q=torch.sum(y*gc.conj()[None,:,:],dim=-1).T.real
-        out[c0:c1]=torch.sum(q,dim=1)
+        second_eff=torch.sum(
+            y*gc.conj()[None,:,:],dim=-1
+        ).T.real
+
+        sigma2=torch.clamp(
+            second_eff-torch.abs(mu)**2,
+            min=0.0,
+        ).to(rd)
+
+        out[c0:c1]=torch.sum(
+            sigma2+torch.abs(mu)**2,
+            dim=1,
+        ).real
 
     return out
 

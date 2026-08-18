@@ -72,6 +72,7 @@ def make_generation_spec(
         "z_chunk": int(z_chunk),
         "banks_per_shard": int(banks_per_shard),
         "gg_lookup_sha256": str(gg_lookup_sha256),
+        "analytic_mean_version": ANALYTIC_MEAN_VERSION,
         "target": "logQ05GG",
         "q05_definition": "symmetric_gamma_gamma(analytic_muSNR,varEmp_MC)",
     }
