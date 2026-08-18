@@ -1,0 +1,83 @@
+project: symmetric_gg_q05_nn_v1
+seed: 20260818
+
+environments:
+  total_banks: 4000
+  split:
+    train: 2800
+    validation: 600
+    test_interpolation: 600
+  scenario_families:
+    Indoor-Office: 1000
+    UMi: 1000
+    UMa: 1000
+    RMa: 1000
+  link_state_per_family:
+    LOS_LOS: 250
+    LOS_NLOS: 250
+    NLOS_LOS: 250
+    NLOS_NLOS: 250
+  geometry_split: controlled_interpolation
+
+arrays:
+  nT_min: 4
+  nRIS_values: [64, 128, 256, 512]
+  target_banks_per_nRIS: 1000
+  dual_polarization: true
+  polarization_angles_deg: [45, -45]
+
+candidates_per_bank:
+  W: 32
+  Z: 512
+  total: 16384
+
+W_pool:
+  requirement: unique_type1_rank1
+  codebook_mode: 1
+  layers: 1
+  pilot_selected: 8
+  coverage_fill: 24
+  pilot_stream_independent_of_mc_labels: true
+
+Z_pool:
+  total: 512
+  anchors: 4
+  global_random_bernoulli_half: 256
+  density_stratified: 96
+  structured_2d: 64
+  local_perturbations: 92
+  density_ratios: [0.1, 0.2, 0.3, 0.4, 0.6, 0.7, 0.8, 0.9]
+  local_seed_count: 4
+  local_patterns_per_seed: 23
+  local_hamming_sizes: [1, 2, 4, 8]
+  deduplicate: true
+
+monte_carlo:
+  realizations: 64000
+  variance_normalization: population
+  channel_rng_native_cuda: true
+
+label:
+  distribution: symmetric_gamma_gamma
+  outage_probability: 0.05
+  mean_source: analytic_muSNR
+  variance_source: empirical_MC_64000
+  training_target: log_q05GG
+
+diagnostics_to_store:
+  - meanEmp64k
+  - varEmp64k
+  - varRatio64k
+  - logVarRatio64k
+  - ggShapeA
+  - q05GG
+  - logQ05GG
+
+forbidden_nn_inputs:
+  - meanEmp64k
+  - varEmp64k
+  - varRatio64k
+  - logVarRatio64k
+  - ggShapeA
+  - q05GG
+  - logQ05GG

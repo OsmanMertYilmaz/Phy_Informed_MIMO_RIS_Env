@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
+
+# Large generated artifacts
+data/
+datasets/
+outputs/
+checkpoints/
+models/
+*.parquet
+*.pt
+*.pth
+*.ckpt
+*.mat
+
+# Keep tiny explicit golden fixtures only when force-added.

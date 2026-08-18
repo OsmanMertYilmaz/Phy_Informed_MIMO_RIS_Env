@@ -1,0 +1,21 @@
+{
+  "repo": "Phy_Informed_MIMO_RIS_Env",
+  "version": "0.1.0",
+  "production_modules": [
+    "src/ris_env/antenna.py",
+    "src/ris_env/spatial_correlation.py",
+    "src/ris_env/snr_statistics.py",
+    "src/ris_env/ris_response.py",
+    "src/ris_env/codebook.py",
+    "src/ris_env/geometry_lsp.py",
+    "src/ris_env/environment.py",
+    "src/ris_env/rho_cache.py",
+    "src/ris_env/channel_primitives.py",
+    "src/ris_env/channel_realizations.py",
+    "src/ris_env/validation.py",
+    "src/ris_env/gamma_gamma.py",
+    "src/ris_env/label_engine.py"
+  ],
+  "dataset_config": "configs/nn_dataset_4000.yaml",
+  "status": "Stage 8B complete; Stage 8C production refactor snapshot"
+}

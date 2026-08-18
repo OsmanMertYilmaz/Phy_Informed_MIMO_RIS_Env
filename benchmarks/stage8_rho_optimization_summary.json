@@ -1,0 +1,32 @@
+{
+  "baseline_subset": {
+    "n_banks": 64,
+    "rho_median_seconds_per_bank": 0.7872151965000285,
+    "rho_mean_seconds_per_bank": 0.8108697976093726,
+    "wall_seconds": 54.017533883000056,
+    "banks_per_second_from_rho_median": 1.2703006807363681
+  },
+  "optimized_subset": {
+    "n_banks": 64,
+    "n_shape_buckets": 8,
+    "wall_seconds": 7.755953082000019,
+    "banks_per_second": 8.251726038484028,
+    "seconds_per_bank": 0.1211867669062503,
+    "cache_stats": {
+      "array_cache_entries": 7,
+      "shape_cache_entries": 8
+    }
+  },
+  "subset_speedup": 6.691075422753533,
+  "full_dataset": {
+    "n_banks": 2000,
+    "n_shape_buckets": 150,
+    "wall_seconds": 142.6558499990001,
+    "banks_per_second": 14.019754535225987,
+    "seconds_per_bank": 0.07132792499950005,
+    "cache_stats": {
+      "array_cache_entries": 11,
+      "shape_cache_entries": 150
+    }
+  }
+}
