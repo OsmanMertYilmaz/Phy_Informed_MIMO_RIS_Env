@@ -5,12 +5,11 @@ Locked statistical target
 -------------------------
 For every physical candidate (environment, W_k, z_c):
 
-    analytic muSNR(k,c)
-    empirical varEmp(k,c) from N Monte-Carlo channel realizations
+    empirical meanEmp(k,c) and varEmp(k,c) from N Monte-Carlo channel realizations
 
 are mapped to the project's Symmetric Gamma-Gamma q05:
 
-    q05GG(k,c) = GG_q05(muSNR(k,c), varEmp(k,c))
+    q05GG(k,c) = GG_q05(meanEmp(k,c), varEmp(k,c))
 
 N is expected to be chosen by Stage 8B-3A. Current locked benchmark value:
     N = 64_000
@@ -928,7 +927,7 @@ def run_symmetric_gg_label_engine(
         lookup,device=dev,dtype=torch.float64
     )
     gg=symmetric_gg_q05_torch(
-        mu.to(torch.float64),
+        emp["meanEmp"],
         emp["varEmp"],
         lookup_t,
     )

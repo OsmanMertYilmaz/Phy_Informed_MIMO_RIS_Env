@@ -27,7 +27,8 @@ import numpy as np
 import pandas as pd
 
 
-DATASET_SCHEMA_VERSION = "teacher_q05gg_v2"
+DATASET_SCHEMA_VERSION = "teacher_q05gg_v3"
+ANALYTIC_MEAN_VERSION = "stage3_clamped_second_moment_v2"
 
 
 def sha256_file(path: str | Path, block_size: int = 1024 * 1024) -> str:
@@ -74,7 +75,7 @@ def make_generation_spec(
         "gg_lookup_sha256": str(gg_lookup_sha256),
         "analytic_mean_version": ANALYTIC_MEAN_VERSION,
         "target": "logQ05GG",
-        "q05_definition": "symmetric_gamma_gamma(analytic_muSNR,varEmp_MC)",
+        "q05_definition": "symmetric_gamma_gamma(meanEmp_MC,varEmp_MC)",
     }
     spec["signature"] = stable_json_hash(spec)
     return spec
