@@ -107,7 +107,7 @@ def main():
     D = D[D["splitID"].astype(str).isin(args.splits)].copy()
     D = D.sort_values("bankID").reset_index(drop=True)
 
-    asset_ref = resources.files("ris_env").joinpath("assets/gg_q05_lookup.npz")
+    asset_ref = resources.files("ris_env").joinpath("assets/gg_q05_lookup_log_v3.npz")
     with resources.as_file(asset_ref) as lookup_path:
         lookup_sha256 = sha256_file(lookup_path)
 
@@ -255,8 +255,11 @@ def main():
                     )
                 if not np.isfinite(frame["logQ05GG"].to_numpy()).all():
                     raise RuntimeError(f"bankID={bank_id}: non-finite logQ05GG.")
-                if not (frame["q05GG"].to_numpy() > 0).all():
-                    raise RuntimeError(f"bankID={bank_id}: non-positive q05GG.")
+                q05_diag = frame["q05GG"].to_numpy(np.float64)
+                if not np.isfinite(q05_diag).all():
+                    raise RuntimeError(f"bankID={bank_id}: non-finite diagnostic q05GG.")
+                if not (q05_diag >= 0).all():
+                    raise RuntimeError(f"bankID={bank_id}: negative diagnostic q05GG.")
                 if bool(frame["lookupClamped"].astype(bool).any()):
                     cv2_max=float(frame.loc[frame["lookupClamped"].astype(bool),"cv2"].max())
                     raise RuntimeError(
