@@ -18,7 +18,7 @@ def test_schema_v4_and_packaged_log_lookup():
 
     assert (
         DATASET_SCHEMA_VERSION
-        == "teacher_q05gg_v4"
+        == "teacher_q05gg_v5"
     )
 
     lookup = load_packaged_gg_lookup()
