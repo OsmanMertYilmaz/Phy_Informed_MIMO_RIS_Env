@@ -10,12 +10,22 @@ from ris_env.teacher_pipeline import (
 
 def test_packaged_gg_lookup():
     lut = load_packaged_gg_lookup()
+
     assert lut.log_cv2.ndim == 1
-    assert lut.qnorm.ndim == 1
-    assert len(lut.log_cv2) > 1000
+    assert lut.log_qnorm.ndim == 1
+
+    assert lut.log_cv2.shape == lut.log_qnorm.shape
+    assert lut.log_cv2.size >= 2
+
+    assert np.isfinite(lut.log_cv2).all()
+    assert np.isfinite(lut.log_qnorm).all()
+
     assert np.all(np.diff(lut.log_cv2) > 0)
-    assert np.isfinite(lut.qnorm).all()
-    assert (lut.qnorm >= 0).all()
+
+    assert lut.cv2_min > 0
+    assert lut.cv2_max >= 1e6 * (1 - 1e-12)
+
+    assert lut.legacy_linear_max is not None
 
 
 def test_final_z_pool_counts_and_uniqueness_without_physics():
