@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 
-DATASET_SCHEMA_VERSION = "teacher_q05gg_v3"
+DATASET_SCHEMA_VERSION = "teacher_q05gg_v4"
 ANALYTIC_MEAN_VERSION = "stage3_clamped_second_moment_v2"
 
 
@@ -75,7 +75,9 @@ def make_generation_spec(
         "gg_lookup_sha256": str(gg_lookup_sha256),
         "analytic_mean_version": ANALYTIC_MEAN_VERSION,
         "target": "logQ05GG",
+        "target_representation": "direct_log_domain",
         "q05_definition": "symmetric_gamma_gamma(meanEmp_MC,varEmp_MC)",
+        "q05GG_role": "diagnostic_may_underflow_to_zero",
     }
     spec["signature"] = stable_json_hash(spec)
     return spec
@@ -279,7 +281,7 @@ def standardize_teacher_bank_frame(
     Final per-bank schema written to Parquet.
 
     Main supervised target:
-        logQ05GG = log(q05GG)
+        logQ05GG is supplied directly by the log-domain GG engine.
 
     MC-only diagnostic/target columns are explicitly suffixed with 64k when the
     production N is 64,000, reducing the chance they are accidentally used as
@@ -298,8 +300,10 @@ def standardize_teacher_bank_frame(
             "varEmp": f"varEmp{int(n_mc)}",
         })
 
-    tiny = np.finfo(np.float64).tiny
-    out["logQ05GG"] = np.log(np.maximum(out["q05GG"].to_numpy(np.float64), tiny))
+    if "logQ05GG" not in out.columns:
+        raise ValueError("Teacher labels must contain direct logQ05GG from the GG engine.")
+    if not np.isfinite(out["logQ05GG"].to_numpy(np.float64)).all():
+        raise ValueError("Teacher labels contain non-finite logQ05GG.")
 
     # Stable ordering: identity -> candidate -> bank physics -> analytic -> labels.
     lead = [

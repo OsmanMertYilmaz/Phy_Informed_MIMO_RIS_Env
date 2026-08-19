@@ -99,6 +99,11 @@ from ris_env.gamma_gamma import (
     GGQ05Lookup,
     build_gg_lookup_from_dataset,
 )
+from ris_env.gamma_gamma_log import (
+    GGLogQ05Lookup,
+    torch_log_lookup,
+    symmetric_gg_logq05_torch,
+)
 
 
 COMPLEX_BYTES_C64 = 8
@@ -882,7 +887,7 @@ def run_symmetric_gg_label_engine(
     static_env,
     W: torch.Tensor,
     gamma: torch.Tensor,
-    lookup: GGQ05Lookup,
+    lookup: GGLogQ05Lookup,
     *,
     n_mc: int=64_000,
     mc_chunk: int=256,
@@ -923,10 +928,10 @@ def run_symmetric_gg_label_engine(
 
     t0=time.perf_counter()
 
-    lookup_t=torch_gg_lookup(
+    lookup_t=torch_log_lookup(
         lookup,device=dev,dtype=torch.float64
     )
-    gg=symmetric_gg_q05_torch(
+    gg=symmetric_gg_logq05_torch(
         emp["meanEmp"],
         emp["varEmp"],
         lookup_t,
@@ -944,6 +949,7 @@ def run_symmetric_gg_label_engine(
         "meanEmp":emp["meanEmp"],
         "varEmp":emp["varEmp"],
         "q05GG":gg["q05GG"],
+        "logQ05GG":gg["logQ05GG"],
         "shapeA":gg["shapeA"],
         "cv2":gg["cv2"],
         "lookupClamped":gg["lookupClamped"],
@@ -978,7 +984,7 @@ def flatten_label_result(
 
     zString is intentionally included for downstream dataset generation.
     """
-    K,C=result["q05GG"].shape
+    K,C=result["logQ05GG"].shape
 
     widx=WIdx.detach().cpu().numpy()
     zcpu=z.detach().cpu().numpy().astype(np.int8)
@@ -987,6 +993,7 @@ def flatten_label_result(
     mean=result["meanEmp"].detach().cpu().numpy()
     var=result["varEmp"].detach().cpu().numpy()
     q=result["q05GG"].detach().cpu().numpy()
+    logq=result["logQ05GG"].detach().cpu().numpy()
     shape=result["shapeA"].detach().cpu().numpy()
     cv2=result["cv2"].detach().cpu().numpy()
     clamp=result["lookupClamped"].detach().cpu().numpy()
@@ -1007,6 +1014,7 @@ def flatten_label_result(
                 "cv2":float(cv2[k,c]),
                 "ggShapeA":float(shape[k,c]),
                 "q05GG":float(q[k,c]),
+                "logQ05GG":float(logq[k,c]),
                 "lookupClamped":bool(clamp[k,c]),
             })
     return pd.DataFrame(rows)

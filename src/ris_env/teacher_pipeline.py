@@ -30,7 +30,10 @@ import pandas as pd
 import torch
 
 from ris_env.environment import build_deterministic_bank
-from ris_env.gamma_gamma import GGQ05Lookup
+from ris_env.gamma_gamma_log import (
+    GGLogQ05Lookup,
+    load_log_lookup_npz,
+)
 from ris_env.ris_response import generate_ris_response_from_z
 from ris_env.label_engine import (
     row_to_bank_input,
@@ -56,21 +59,13 @@ def _device(device=None) -> torch.device:
     return torch.device(device)
 
 
-def load_packaged_gg_lookup() -> GGQ05Lookup:
-    """Load the frozen project q05 lookup shipped inside the Python package."""
-    asset = resources.files("ris_env").joinpath("assets/gg_q05_lookup.npz")
+def load_packaged_gg_lookup() -> GGLogQ05Lookup:
+    # Frozen direct-log Symmetric-GG lookup.
+    asset = resources.files('ris_env').joinpath(
+        'assets/gg_q05_lookup_log_v3.npz'
+    )
     with resources.as_file(asset) as p:
-        x = np.load(p)
-        legacy_max=(
-            float(np.asarray(x["legacy_linear_max"]).reshape(()))
-            if "legacy_linear_max" in x.files
-            else None
-        )
-        return GGQ05Lookup(
-            log_cv2=np.asarray(x["log_cv2"], dtype=np.float64),
-            qnorm=np.asarray(x["qnorm"], dtype=np.float64),
-            legacy_linear_max=legacy_max,
-        )
+        return load_log_lookup_npz(p)
 
 
 def _scalar(x):
@@ -456,7 +451,7 @@ def prepare_teacher_bank(
 def run_teacher_bank(
     prepared: TeacherBankPrepared,
     *,
-    lookup: Optional[GGQ05Lookup]=None,
+    lookup: Optional[GGLogQ05Lookup]=None,
     n_mc: int=64_000,
     mc_chunk: int=256,
     w_chunk: int=4,
