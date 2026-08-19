@@ -24,6 +24,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 
+from ris_env.adaptive_teacher import run_teacher_bank_adaptive
 from ris_env.dataset_writer import (
     make_generation_spec,
     plan_shards,
@@ -75,9 +76,9 @@ def parse_args():
     p.add_argument("--n-mc", type=int, default=64_000)
     p.add_argument("--k-w", type=int, default=32)
     p.add_argument("--banks-per-shard", type=int, default=10)
-    p.add_argument("--mc-chunk", type=int, default=256)
-    p.add_argument("--w-chunk", type=int, default=4)
-    p.add_argument("--z-chunk", type=int, default=64)
+    p.add_argument("--mc-chunk", type=int, default=4000)
+    p.add_argument("--w-chunk", type=int, default=8)
+    p.add_argument("--z-chunk", type=int, default=128)
     p.add_argument("--device", default=None)
 
     p.add_argument(
@@ -92,6 +93,13 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if int(args.n_mc) != 64_000:
+        raise ValueError(
+            "Adaptive Teacher V5 requires --n-mc 64000 "
+            "(frozen base MC budget)."
+        )
+
     dev = torch.device(
         args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu")
     )
@@ -146,7 +154,9 @@ def main():
     print(f"Device              : {dev}")
     if dev.type == "cuda":
         print(f"GPU                 : {torch.cuda.get_device_name(dev)}")
-    print(f"N_MC                : {args.n_mc:,}")
+    print(f"N_MC base           : {args.n_mc:,}")
+    print("N_MC max            : 512,000")
+    print("MC policy           : adaptive_logq_stability_v1")
     print(f"W / Z per bank      : {args.k_w} / 512")
     print(f"Rows per bank       : {args.k_w * 512:,}")
     print(f"Banks per shard     : {args.banks_per_shard}")
@@ -232,14 +242,38 @@ def main():
                     parity=False,
                     z_chunk=args.z_chunk,
                 )
-                result = run_teacher_bank(
+                result = run_teacher_bank_adaptive(
                     prepared,
-                    n_mc=args.n_mc,
+                        half_n=32_000,
+                    base_n=64_000,
+                    early_p99_threshold=0.05,
+                    stability_p90_threshold=0.10,
+                    max_n=512_000,
                     mc_chunk=args.mc_chunk,
                     w_chunk=args.w_chunk,
                     z_chunk=args.z_chunk,
                     device=dev,
                     parity=False,
+                )
+
+                # Generator progress diagnostics only.
+                # These are NOT NN inputs and do not change the Teacher target.
+                _mu = result["muSNR"].to(torch.float64)
+                _mean = result["meanEmp"].to(torch.float64)
+                _tiny = torch.finfo(torch.float64).tiny
+
+                _mean_ape = (
+                    torch.abs(_mu - _mean)
+                    / torch.clamp(torch.abs(_mean), min=_tiny)
+                    * 100.0
+                )
+
+                result["mean_mdape_pct"] = float(
+                    torch.median(_mean_ape).item()
+                )
+
+                result["mean_p90ape_pct"] = float(
+                    torch.quantile(_mean_ape, 0.90).item()
                 )
                 frame = standardize_teacher_bank_frame(
                     result["labels"],

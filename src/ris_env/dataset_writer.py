@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 
-DATASET_SCHEMA_VERSION = "teacher_q05gg_v4"
+DATASET_SCHEMA_VERSION = "teacher_q05gg_v5"
 ANALYTIC_MEAN_VERSION = "stage3_clamped_second_moment_v2"
 
 
@@ -60,26 +60,95 @@ def make_generation_spec(
     banks_per_shard: int,
     gg_lookup_sha256: str,
 ) -> Dict[str, Any]:
+
     environment_csv = Path(environment_csv)
+
     spec = {
-        "schema_version": DATASET_SCHEMA_VERSION,
-        "environment_csv_name": environment_csv.name,
-        "environment_sha256": sha256_file(environment_csv),
-        "n_mc": int(n_mc),
-        "k_w": int(k_w),
-        "z_count": 512,
-        "mc_chunk": int(mc_chunk),
-        "w_chunk": int(w_chunk),
-        "z_chunk": int(z_chunk),
-        "banks_per_shard": int(banks_per_shard),
-        "gg_lookup_sha256": str(gg_lookup_sha256),
-        "analytic_mean_version": ANALYTIC_MEAN_VERSION,
-        "target": "logQ05GG",
-        "target_representation": "direct_log_domain",
-        "q05_definition": "symmetric_gamma_gamma(meanEmp_MC,varEmp_MC)",
-        "q05GG_role": "diagnostic_may_underflow_to_zero",
+        "schema_version":
+            DATASET_SCHEMA_VERSION,
+
+        "environment_csv_name":
+            environment_csv.name,
+
+        "environment_sha256":
+            sha256_file(environment_csv),
+
+        # n_mc now means the common BASE MC budget.
+        "n_mc":
+            int(n_mc),
+
+        "n_mc_role":
+            "adaptive_base_budget",
+
+        "k_w":
+            int(k_w),
+
+        "z_count":
+            512,
+
+        "mc_chunk":
+            int(mc_chunk),
+
+        "w_chunk":
+            int(w_chunk),
+
+        "z_chunk":
+            int(z_chunk),
+
+        "banks_per_shard":
+            int(banks_per_shard),
+
+        "gg_lookup_sha256":
+            str(gg_lookup_sha256),
+
+        "analytic_mean_version":
+            ANALYTIC_MEAN_VERSION,
+
+        # ----------------------------------------------------
+        # Frozen Adaptive-MC policy
+        # ----------------------------------------------------
+        "mc_policy":
+            "adaptive_logq_stability_v1",
+
+        "mc_half_n":
+            32_000,
+
+        "mc_base_n":
+            64_000,
+
+        "mc_max_n":
+            512_000,
+
+        "mc_initial_trigger":
+            "P99_z_abs_logQ64_minus_logQ32",
+
+        "mc_initial_threshold":
+            0.05,
+
+        "mc_refinement_stability":
+            "P90_z_abs_logQ_new_minus_logQ_previous",
+
+        "mc_stability_threshold":
+            0.10,
+
+        # ----------------------------------------------------
+        # Teacher target
+        # ----------------------------------------------------
+        "target":
+            "logQ05GG",
+
+        "target_representation":
+            "direct_log_domain",
+
+        "q05_definition":
+            "symmetric_gamma_gamma(meanEmp_MC,varEmp_MC)",
+
+        "q05GG_role":
+            "diagnostic_may_underflow_to_zero",
     }
+
     spec["signature"] = stable_json_hash(spec)
+
     return spec
 
 
@@ -278,62 +347,256 @@ def standardize_teacher_bank_frame(
     n_mc: int,
 ) -> pd.DataFrame:
     """
-    Final per-bank schema written to Parquet.
+    Final per-bank Parquet schema.
 
-    Main supervised target:
-        logQ05GG is supplied directly by the log-domain GG engine.
+    Teacher target:
+        logQ05GG
 
-    MC-only diagnostic/target columns are explicitly suffixed with 64k when the
-    production N is 64,000, reducing the chance they are accidentally used as
-    deployment inputs.
+    Adaptive Teacher rows contain variable MC budgets.
+    Therefore empirical target-side moments are stored as:
+
+        meanEmpMC
+        varEmpMC
+        N_MC_used
+
+    rather than pretending every row used 64k samples.
+
+    logQ05GG is always preserved directly from the
+    log-domain Gamma-Gamma engine.
     """
-    out = add_constant_physical_columns(labels, row_physical)
 
-    if int(n_mc) == 64_000:
-        out = out.rename(columns={
-            "meanEmp": "meanEmp64k",
-            "varEmp": "varEmp64k",
-        })
-    else:
-        out = out.rename(columns={
-            "meanEmp": f"meanEmp{int(n_mc)}",
-            "varEmp": f"varEmp{int(n_mc)}",
-        })
+    out = add_constant_physical_columns(
+        labels,
+        row_physical,
+    )
+
+    adaptive = (
+        "N_MC_used" in out.columns
+    )
+
+
+    # ========================================================
+    # Direct-log target must already exist.
+    # NEVER reconstruct it from q05GG.
+    # ========================================================
 
     if "logQ05GG" not in out.columns:
-        raise ValueError("Teacher labels must contain direct logQ05GG from the GG engine.")
-    if not np.isfinite(out["logQ05GG"].to_numpy(np.float64)).all():
-        raise ValueError("Teacher labels contain non-finite logQ05GG.")
+        raise ValueError(
+            "Teacher labels must contain direct logQ05GG "
+            "from the GG engine."
+        )
 
-    # Stable ordering: identity -> candidate -> bank physics -> analytic -> labels.
-    lead = [
-        "bankID","splitID","wCandidate","zCandidate",
-        "WIdx_i11","WIdx_i12","WIdx_i2",
-        "zString","candidateType","anchorIndex",
-        "N_MC",
-    ]
-    target_tail = [
-        "muSNR",
-        f"meanEmp{int(n_mc)//1000}k" if int(n_mc) % 1000 == 0 else f"meanEmp{int(n_mc)}",
-        f"varEmp{int(n_mc)//1000}k" if int(n_mc) % 1000 == 0 else f"varEmp{int(n_mc)}",
-        "cv2","ggShapeA","q05GG","logQ05GG","lookupClamped",
-    ]
+    logq = out[
+        "logQ05GG"
+    ].to_numpy(
+        np.float64
+    )
 
-    # Handle production 64k names exactly.
-    if int(n_mc) == 64_000:
-        target_tail[1] = "meanEmp64k"
-        target_tail[2] = "varEmp64k"
+    if not np.isfinite(logq).all():
+        raise ValueError(
+            "Teacher labels contain non-finite logQ05GG."
+        )
+
+
+    # ========================================================
+    # Adaptive V5 path
+    # ========================================================
+
+    if adaptive:
+
+        required = {
+            "meanEmp",
+            "varEmp",
+            "N_MC_used",
+            "mcRefined",
+            "mcConverged",
+            "mcEarlyP99",
+            "mcFinalP90Delta",
+        }
+
+        missing = (
+            required
+            - set(out.columns)
+        )
+
+        if missing:
+            raise ValueError(
+                "Adaptive Teacher labels missing columns: "
+                f"{sorted(missing)}"
+            )
+
+
+        out = out.rename(
+            columns={
+                "meanEmp":
+                    "meanEmpMC",
+
+                "varEmp":
+                    "varEmpMC",
+            }
+        )
+
+
+        n_used = out[
+            "N_MC_used"
+        ].to_numpy(
+            np.int64
+        )
+
+        if np.any(n_used < int(n_mc)):
+            raise ValueError(
+                "Adaptive N_MC_used is smaller than "
+                f"base n_mc={int(n_mc)}."
+            )
+
+        if np.any(n_used > 512_000):
+            raise ValueError(
+                "Adaptive N_MC_used exceeded frozen "
+                "512k production cap."
+            )
+
+
+        lead = [
+            "bankID",
+            "splitID",
+
+            "wCandidate",
+            "zCandidate",
+
+            "WIdx_i11",
+            "WIdx_i12",
+            "WIdx_i2",
+
+            "zString",
+            "candidateType",
+            "anchorIndex",
+
+            "N_MC_base",
+        ]
+
+
+        target_tail = [
+            # deployable analytic physics quantity
+            "muSNR",
+
+            # MC-only target-side diagnostics
+            "meanEmpMC",
+            "varEmpMC",
+            "N_MC_used",
+            "mcRefined",
+            "mcConverged",
+            "mcEarlyP99",
+            "mcFinalP90Delta",
+
+            # GG diagnostics / target
+            "cv2",
+            "ggShapeA",
+            "q05GG",
+            "logQ05GG",
+            "lookupClamped",
+        ]
+
+
+    # ========================================================
+    # Legacy fixed-N path
+    #
+    # Kept only so existing tests / old non-adaptive utilities
+    # do not break.
+    # ========================================================
+
+    else:
+
+        if int(n_mc) == 64_000:
+
+            mean_name = "meanEmp64k"
+            var_name = "varEmp64k"
+
+        else:
+
+            suffix = (
+                f"{int(n_mc)//1000}k"
+                if int(n_mc) % 1000 == 0
+                else str(int(n_mc))
+            )
+
+            mean_name = (
+                f"meanEmp{suffix}"
+            )
+
+            var_name = (
+                f"varEmp{suffix}"
+            )
+
+
+        out = out.rename(
+            columns={
+                "meanEmp":
+                    mean_name,
+
+                "varEmp":
+                    var_name,
+            }
+        )
+
+
+        lead = [
+            "bankID",
+            "splitID",
+
+            "wCandidate",
+            "zCandidate",
+
+            "WIdx_i11",
+            "WIdx_i12",
+            "WIdx_i2",
+
+            "zString",
+            "candidateType",
+            "anchorIndex",
+
+            "N_MC",
+        ]
+
+
+        target_tail = [
+            "muSNR",
+            mean_name,
+            var_name,
+            "cv2",
+            "ggShapeA",
+            "q05GG",
+            "logQ05GG",
+            "lookupClamped",
+        ]
+
+
+    # ========================================================
+    # Stable column order
+    # ========================================================
 
     ordered = []
+
     for c in lead:
-        if c in out.columns and c not in ordered:
+        if (
+            c in out.columns
+            and c not in ordered
+        ):
             ordered.append(c)
+
     for c in out.columns:
-        if c not in ordered and c not in target_tail:
+        if (
+            c not in ordered
+            and c not in target_tail
+        ):
             ordered.append(c)
+
     for c in target_tail:
-        if c in out.columns and c not in ordered:
+        if (
+            c in out.columns
+            and c not in ordered
+        ):
             ordered.append(c)
+
     return out[ordered]
 
 
