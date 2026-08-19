@@ -244,8 +244,7 @@ def main():
                 )
                 result = run_teacher_bank_adaptive(
                     prepared,
-                    lookup=lookup,
-                    half_n=32_000,
+                        half_n=32_000,
                     base_n=64_000,
                     early_p99_threshold=0.05,
                     stability_p90_threshold=0.10,
