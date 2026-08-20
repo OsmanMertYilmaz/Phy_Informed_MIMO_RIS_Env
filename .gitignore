@@ -20,3 +20,6 @@ models/
 *.mat
 
 # Keep tiny explicit golden fixtures only when force-added.
+
+*.egg-info/
+*.pyc
