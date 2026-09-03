@@ -35,6 +35,7 @@ from ris_env.gamma_gamma_log import (
     load_log_lookup_npz,
 )
 from ris_env.ris_response import generate_ris_response_from_z
+from ris_env.candidate_design import build_w_specific_z_pool
 from ris_env.label_engine import (
     row_to_bank_input,
     build_w_candidate_pool,
@@ -379,6 +380,8 @@ class TeacherBankPrepared:
     z_anchor_index: np.ndarray
     z_seed_indices: np.ndarray
     deterministic_timings: Dict[str, float]
+    candidate_design: str = "legacy_q05gg_v5"
+    candidate_metadata: Optional[Dict[str, np.ndarray]] = None
 
 
 @torch.inference_mode()
@@ -389,6 +392,8 @@ def prepare_teacher_bank(
     device=None,
     parity: bool=False,
     z_chunk: int=64,
+    candidate_design: str="legacy_q05gg_v5",
+    optimization_sweeps: int=1,
 ) -> TeacherBankPrepared:
     """
     Prepare one raw environment row for teacher labeling.
@@ -421,16 +426,44 @@ def prepare_teacher_bank(
         parity=parity,
     )
 
-    zpack = build_final_z_pool(
-        static_env,
-        W,
-        nris_x=int(row["nRIS1"] if "nRIS1" in row.index else row["nRIS_x"]),
-        nris_y=int(row["nRIS2"] if "nRIS2" in row.index else row["nRIS_y"]),
-        seed=int(row["ris_seed"]),
-        device=dev,
-        parity=parity,
-        z_chunk=z_chunk,
-    )
+    nris_x = int(row["nRIS1"] if "nRIS1" in row.index else row["nRIS_x"])
+    nris_y = int(row["nRIS2"] if "nRIS2" in row.index else row["nRIS_y"])
+    if candidate_design == "legacy_q05gg_v5":
+        zpack = build_final_z_pool(
+            static_env,
+            W,
+            nris_x=nris_x,
+            nris_y=nris_y,
+            seed=int(row["ris_seed"]),
+            device=dev,
+            parity=parity,
+            z_chunk=z_chunk,
+        )
+        candidate_metadata = None
+    elif candidate_design == "variance_ratio_v1":
+        zpack = build_w_specific_z_pool(
+            static_env,
+            W,
+            nris_x=nris_x,
+            nris_y=nris_y,
+            seed=int(row["ris_seed"]),
+            sweeps=int(optimization_sweeps),
+            parity=parity,
+        )
+        zpack["anchor_index"] = np.full(zpack["candidate_type"].shape, -1)
+        zpack["seed_indices"] = zpack["diverse_seed_indices"][:8]
+        candidate_metadata = {
+            key: zpack[key]
+            for key in (
+                "candidate_type", "canonical_split",
+                "optimization_objective", "optimization_seed_rank",
+                "optimization_sweep_count", "is_optimized", "is_duplicate",
+                "optimization_initial_objective", "optimization_final_objective",
+                "optimization_accepted_flips",
+            )
+        }
+    else:
+        raise ValueError(f"Unknown candidate_design={candidate_design!r}")
 
     return TeacherBankPrepared(
         row_raw=row.copy(),
@@ -444,6 +477,8 @@ def prepare_teacher_bank(
         z_anchor_index=zpack["anchor_index"],
         z_seed_indices=zpack["seed_indices"],
         deterministic_timings=timings,
+        candidate_design=candidate_design,
+        candidate_metadata=candidate_metadata,
     )
 
 

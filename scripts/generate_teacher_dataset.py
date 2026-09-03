@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Full 4,000-bank teacher dataset generator.
+Resumable production teacher dataset generator.
 
 Each persistent shard contains whole banks. Physics is executed on GPU, the
 Parquet shard is created on local SSD, then copied to Drive only after close.
@@ -40,6 +40,7 @@ from ris_env.teacher_pipeline import (
     prepare_teacher_bank,
     run_teacher_bank,
 )
+from ris_env.variance_ratio_contract import validate_variance_ratio_bank_frame
 
 
 def git_commit() -> str | None:
@@ -80,6 +81,12 @@ def parse_args():
     p.add_argument("--w-chunk", type=int, default=8)
     p.add_argument("--z-chunk", type=int, default=128)
     p.add_argument("--device", default=None)
+    p.add_argument(
+        "--candidate-design",
+        choices=["legacy_q05gg_v5", "variance_ratio_v1"],
+        default="legacy_q05gg_v5",
+    )
+    p.add_argument("--optimization-sweeps", type=int, default=1)
 
     p.add_argument(
         "--splits",
@@ -87,6 +94,12 @@ def parse_args():
         default=["train","validation","test_interpolation"],
     )
     p.add_argument("--max-banks", type=int, default=None)
+    p.add_argument(
+        "--target-completed-banks",
+        type=int,
+        default=None,
+        help="Absolute completed-bank cap; safe for resumable pilot reruns.",
+    )
     p.add_argument("--status-only", action="store_true")
     return p.parse_args()
 
@@ -128,6 +141,8 @@ def main():
         z_chunk=args.z_chunk,
         banks_per_shard=args.banks_per_shard,
         gg_lookup_sha256=lookup_sha256,
+        candidate_design=args.candidate_design,
+        optimization_sweeps=args.optimization_sweeps,
     )
     plans = [
         x for x in plan_shards(D, banks_per_shard=args.banks_per_shard)
@@ -158,6 +173,10 @@ def main():
     print("N_MC max            : 512,000")
     print("MC policy           : adaptive_logq_stability_v1")
     print(f"W / Z per bank      : {args.k_w} / 512")
+    print(f"Candidate design    : {args.candidate_design}")
+    if args.candidate_design == "variance_ratio_v1":
+        print(f"Optimization sweeps : {args.optimization_sweeps}")
+        print("Teacher target      : targetLogVarRatio")
     print(f"Rows per bank       : {args.k_w * 512:,}")
     print(f"Banks per shard     : {args.banks_per_shard}")
     print(f"Total banks         : {summary['total_banks']:,}")
@@ -171,6 +190,15 @@ def main():
         return
 
     completed = set(map(int, manifest.get("completed_banks", [])))
+    if (
+        args.target_completed_banks is not None
+        and len(completed) >= int(args.target_completed_banks)
+    ):
+        print(
+            f"Requested completed-bank target already reached: "
+            f"{len(completed):,}/{int(args.target_completed_banks):,}"
+        )
+        return
     processed_this_run = 0
     bank_times = []
 
@@ -192,6 +220,20 @@ def main():
         if args.max_banks is not None:
             remaining_budget = int(args.max_banks) - processed_this_run
             if remaining_budget <= 0:
+                break
+
+        if args.target_completed_banks is not None:
+            remaining_total = (
+                int(args.target_completed_banks)
+                - len(completed)
+            )
+            if remaining_total <= 0:
+                break
+            if len(planned_ids) > remaining_total:
+                print(
+                    f"Stopping before {plan['filename']}: absolute pilot target "
+                    "would split an atomic shard."
+                )
                 break
             if len(planned_ids) > remaining_budget:
                 print(
@@ -241,6 +283,8 @@ def main():
                     device=dev,
                     parity=False,
                     z_chunk=args.z_chunk,
+                    candidate_design=args.candidate_design,
+                    optimization_sweeps=args.optimization_sweeps,
                 )
                 result = run_teacher_bank_adaptive(
                     prepared,
@@ -287,19 +331,31 @@ def main():
                         f"bankID={bank_id}: {len(frame)} rows, "
                         f"expected {expected_bank_rows}."
                     )
-                if not np.isfinite(frame["logQ05GG"].to_numpy()).all():
-                    raise RuntimeError(f"bankID={bank_id}: non-finite logQ05GG.")
+                target_column = (
+                    "targetLogVarRatio"
+                    if args.candidate_design == "variance_ratio_v1"
+                    else "logQ05GG"
+                )
+                if not np.isfinite(frame[target_column].to_numpy()).all():
+                    raise RuntimeError(
+                        f"bankID={bank_id}: non-finite {target_column}."
+                    )
                 q05_diag = frame["q05GG"].to_numpy(np.float64)
                 if not np.isfinite(q05_diag).all():
                     raise RuntimeError(f"bankID={bank_id}: non-finite diagnostic q05GG.")
                 if not (q05_diag >= 0).all():
                     raise RuntimeError(f"bankID={bank_id}: negative diagnostic q05GG.")
-                if bool(frame["lookupClamped"].astype(bool).any()):
+                if (
+                    args.candidate_design == "legacy_q05gg_v5"
+                    and bool(frame["lookupClamped"].astype(bool).any())
+                ):
                     cv2_max=float(frame.loc[frame["lookupClamped"].astype(bool),"cv2"].max())
                     raise RuntimeError(
                         f"bankID={bank_id}: GG lookup clamp detected (max CV2={cv2_max:.6g}). "
                         "Production generation stops instead of writing clipped labels."
                     )
+                if args.candidate_design == "variance_ratio_v1":
+                    validate_variance_ratio_bank_frame(frame, strict=True)
 
                 table = pa.Table.from_pandas(frame, preserve_index=False)
                 if writer is None:

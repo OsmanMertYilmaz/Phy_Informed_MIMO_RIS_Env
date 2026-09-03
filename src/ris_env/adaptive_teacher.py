@@ -32,6 +32,7 @@ from ris_env.gamma_gamma_log import (
 from ris_env.teacher_pipeline import (
     load_packaged_gg_lookup,
 )
+from ris_env.candidate_design import evaluate_paired_analytic_stats
 
 
 def _sync(dev: torch.device) -> None:
@@ -629,12 +630,23 @@ def run_teacher_bank_adaptive(
     _sync(dev)
     t_mu = time.perf_counter()
 
-    mu_snr = analytic_mu_snr_multi_w_z(
-        prepared.static_env,
-        prepared.W,
-        prepared.gamma,
-        z_chunk=z_chunk,
-    )
+    if prepared.gamma.ndim == 2:
+        analytic = {
+            "muSNR": analytic_mu_snr_multi_w_z(
+                prepared.static_env,
+                prepared.W,
+                prepared.gamma,
+                z_chunk=z_chunk,
+            )
+        }
+    else:
+        analytic = evaluate_paired_analytic_stats(
+            prepared.static_env,
+            prepared.W,
+            prepared.gamma,
+            z_chunk=z_chunk,
+        )
+    mu_snr = analytic["muSNR"]
 
     _sync(dev)
 
@@ -695,6 +707,28 @@ def run_teacher_bank_adaptive(
             .expand(K, C),
     }
 
+    if prepared.candidate_design == "variance_ratio_v1":
+        var64 = final_var.to(torch.float64)
+        wick64 = analytic["sigma2Wick"].to(torch.float64)
+        finite_positive = (
+            torch.isfinite(var64) & torch.isfinite(wick64)
+            & (var64 > 0.0) & (wick64 > 0.0)
+        )
+        tiny = torch.finfo(torch.float64).tiny
+        log_var = torch.log(torch.clamp(var64, min=tiny))
+        log_wick = torch.log(torch.clamp(wick64, min=tiny))
+        target = log_var - log_wick
+        result.update({
+            "sigma2Wick": wick64,
+            "wickCV2": analytic["wickCV2"].to(torch.float64),
+            "Neff": analytic["Neff"].to(torch.float64),
+            "varRatio": torch.exp(target),
+            "targetLogVarRatio": target,
+            "targetIdentityError": torch.abs(target - (log_var - log_wick)),
+            "analyticValid": finite_positive,
+            "isReliable": finite_positive & result["mcConverged"],
+        })
+
 
     # ====================================================
     # 11. Existing 32x512 flattening contract
@@ -714,17 +748,34 @@ def run_teacher_bank_adaptive(
         dtype=np.int64
     )
 
-    labels[
-        "candidateType"
-    ] = prepared.z_candidate_type[
-        zc
-    ]
-
-    labels[
-        "anchorIndex"
-    ] = prepared.z_anchor_index[
-        zc
-    ]
+    if prepared.candidate_metadata is None:
+        labels["candidateType"] = prepared.z_candidate_type[zc]
+        labels["anchorIndex"] = prepared.z_anchor_index[zc]
+    else:
+        meta = prepared.candidate_metadata
+        labels["candidateType"] = meta["candidate_type"].reshape(-1)
+        labels["anchorIndex"] = -1
+        labels["canonicalSplit"] = meta["canonical_split"].reshape(-1)
+        labels["optimizationObjective"] = meta[
+            "optimization_objective"
+        ].reshape(-1)
+        labels["optimizationSeedRank"] = meta[
+            "optimization_seed_rank"
+        ].reshape(-1)
+        labels["optimizationSweepCount"] = meta[
+            "optimization_sweep_count"
+        ].reshape(-1)
+        labels["isOptimized"] = meta["is_optimized"].reshape(-1)
+        labels["isDuplicate"] = meta["is_duplicate"].reshape(-1)
+        labels["optimizationInitialObjective"] = meta[
+            "optimization_initial_objective"
+        ].reshape(-1)
+        labels["optimizationFinalObjective"] = meta[
+            "optimization_final_objective"
+        ].reshape(-1)
+        labels["optimizationAcceptedFlips"] = meta[
+            "optimization_accepted_flips"
+        ].reshape(-1)
 
 
     # Adaptive fields follow same K-major/C-minor
@@ -770,6 +821,17 @@ def run_teacher_bank_adaptive(
         .numpy()
         .reshape(-1)
     )
+
+    for name in (
+        "sigma2Wick", "wickCV2", "Neff", "varRatio",
+        "targetLogVarRatio", "targetIdentityError",
+        "analyticValid", "isReliable",
+    ):
+        if name in result:
+            values = result[name].detach().cpu().numpy().reshape(-1)
+            if name in ("analyticValid", "isReliable"):
+                values = values.astype(bool)
+            labels[name] = values
 
 
     # ====================================================

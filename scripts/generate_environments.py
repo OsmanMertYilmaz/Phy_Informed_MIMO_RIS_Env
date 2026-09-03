@@ -26,7 +26,7 @@ def main():
     print(f"Banks               : {len(df):,}")
     print("\nSplit counts")
     print(df["split"].value_counts().reindex(
-        ["train","validation","test_interpolation"]
+        list(cfg["environments"]["split"])
     ).to_string())
     print("\nScenario family counts")
     print(df["family"].value_counts().sort_index().to_string())

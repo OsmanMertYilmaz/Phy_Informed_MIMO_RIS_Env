@@ -168,7 +168,11 @@ def create_selective_refiner(
         base_n=int(baseline.n_samples),
 
         W=baseline.W[idx],
-        gamma=baseline.gamma,
+        gamma=(
+            baseline.gamma
+            if baseline.gamma.ndim == 2
+            else baseline.gamma[idx]
+        ),
 
         w_indices=idx,
 
@@ -271,9 +275,7 @@ def advance_selective_refiner(
     dev = state.device
     gamma = state.gamma
 
-    C = int(
-        gamma.shape[0]
-    )
+    C = int(gamma.shape[0] if gamma.ndim == 2 else gamma.shape[1])
 
 
     if dev.type == "cuda":
@@ -358,11 +360,10 @@ def advance_selective_refiner(
             )
 
 
-            basis_flat = basis.reshape(
-                N
-                * int(loc.numel())
-                * R,
-                I,
+            basis_flat = (
+                basis.reshape(N * int(loc.numel()) * R, I)
+                if gamma.ndim == 2
+                else None
             )
 
 
@@ -377,20 +378,14 @@ def advance_selective_refiner(
                     C,
                 )
 
-                gc = gamma[
-                    c0:c1
-                ]
-
-
-                eff = (
-                    basis_flat
-                    @ gc.T
-                ).reshape(
-                    N,
-                    int(loc.numel()),
-                    R,
-                    c1-c0,
-                )
+                if gamma.ndim == 2:
+                    gc = gamma[c0:c1]
+                    eff = (basis_flat @ gc.T).reshape(
+                        N, int(loc.numel()), R, c1-c0
+                    )
+                else:
+                    gc = gamma[loc, c0:c1, :]
+                    eff = torch.einsum("njri,jci->njrc", basis, gc)
 
 
                 Y = torch.sum(
@@ -429,7 +424,8 @@ def advance_selective_refiner(
 
             del u
             del basis
-            del basis_flat
+            if basis_flat is not None:
+                del basis_flat
 
 
         del HBR

@@ -1,5 +1,5 @@
 """
-Controlled 4,000-bank environment design for the q05-GG NN dataset.
+Controlled environment design for production teacher datasets.
 
 This module generates only cheap bank/environment metadata. It deliberately
 does NOT run rho, channel Monte-Carlo, W selection, RIS candidates, or labels.
@@ -177,6 +177,18 @@ def _canonical_nris_shape(nris: int):
 
 
 def _make_family_rows(family, family_index, cfg, spec, seed):
+    requested = int(cfg["environments"]["scenario_families"][family])
+    split_totals = (
+        {str(k): int(v) for k, v in cfg["environments"]["split_per_family"].items()}
+        if "split_per_family" in cfg["environments"]
+        else None
+    )
+    if requested != 1000 or split_totals is not None:
+        return _make_scaled_family_rows(
+            family, family_index, cfg, spec, seed,
+            requested=requested, split_totals=split_totals,
+        )
+
     rng = np.random.default_rng(int(seed) + 10_000 * (family_index + 1))
     raw_rows = []
 
@@ -287,6 +299,172 @@ def _make_family_rows(family, family_index, cfg, spec, seed):
     return df
 
 
+def _split_counts_per_cell(split_totals, n_cells):
+    """Distribute exact per-family split totals across geometry cells."""
+    names = list(split_totals)
+    base = {name: int(split_totals[name]) // n_cells for name in names}
+    counts = {
+        name: np.full(n_cells, base[name], dtype=int)
+        for name in names
+    }
+    slots = []
+    for split_no, name in enumerate(names):
+        remainder = int(split_totals[name]) % n_cells
+        for j in range(remainder):
+            slots.append((name, (37 * j + 11 * split_no) % n_cells))
+
+    used = set()
+    for name, proposed in slots:
+        cell = proposed
+        while cell in used:
+            cell = (cell + 1) % n_cells
+        counts[name][cell] += 1
+        used.add(cell)
+
+    cell_totals = np.sum(np.stack(list(counts.values()), axis=0), axis=0)
+    if np.max(cell_totals) - np.min(cell_totals) > 1:
+        raise RuntimeError("Split allocation produced imbalanced geometry cells.")
+    return counts
+
+
+def _low_discrepancy_pairs(count, *, cell_id, split_name, train):
+    """Create deterministic, distinct BR/RU offsets inside one cell."""
+    pairs = []
+    if train:
+        # Guarantee that validation/final-test points are strictly inside the
+        # training distance envelope on both axes.
+        pairs.extend([
+            (0.01, 0.01), (0.99, 0.99),
+            (0.01, 0.99), (0.99, 0.01),
+        ][:count])
+
+    split_code = sum(ord(x) for x in str(split_name))
+    seen = set(pairs)
+    j = 0
+    while len(pairs) < count:
+        u = ((j + 1) * 0.6180339887498949 + 0.137 * cell_id + 0.001 * split_code) % 1.0
+        v = ((j + 1) * 0.4142135623730950 + 0.193 * cell_id + 0.003 * split_code) % 1.0
+        lo, width = (0.02, 0.96) if train else (0.05, 0.90)
+        pair = (round(lo + width * u, 14), round(lo + width * v, 14))
+        if pair not in seen:
+            seen.add(pair)
+            pairs.append(pair)
+        j += 1
+    return pairs
+
+
+def _make_scaled_family_rows(
+    family, family_index, cfg, spec, seed, *, requested, split_totals
+):
+    """General controlled design used by the 27,200-bank specification."""
+    if split_totals is None:
+        raise ValueError(
+            "Scaled designs require environments.split_per_family."
+        )
+    if sum(split_totals.values()) != int(requested):
+        raise ValueError(
+            f"{family}: split_per_family sum={sum(split_totals.values())}, "
+            f"expected={requested}."
+        )
+
+    bins = int(cfg["geometry"].get("distance_bins_per_link", 10))
+    n_cells = bins * bins
+    per_cell = _split_counts_per_cell(split_totals, n_cells)
+    rng = np.random.default_rng(int(seed) + 10_000 * (family_index + 1))
+    golden = math.pi * (3.0 - math.sqrt(5.0))
+    phase_br = rng.uniform(0.0, 2.0 * math.pi)
+    phase_ru = rng.uniform(0.0, 2.0 * math.pi)
+    split_names = list(split_totals)
+    split_phase = {
+        name: 2.0 * math.pi * i / max(len(split_names), 1)
+        for i, name in enumerate(split_names)
+    }
+
+    raw_rows = []
+    row_in_family = 0
+    for br_bin in range(bins):
+        for ru_bin in range(bins):
+            cell_id = bins * br_bin + ru_bin
+            for split in split_names:
+                offsets = _low_discrepancy_pairs(
+                    int(per_cell[split][cell_id]),
+                    cell_id=cell_id,
+                    split_name=split,
+                    train=(split == "train"),
+                )
+                for off_br, off_ru in offsets:
+                    u_br = (br_bin + off_br) / bins
+                    u_ru = (ru_bin + off_ru) / bins
+                    d_br = spec.br_min_m + u_br * (spec.br_max_m - spec.br_min_m)
+                    d_ru = spec.ru_min_m + u_ru * (spec.ru_max_m - spec.ru_min_m)
+
+                    h_u_br = ((row_in_family * 0.6180339887498949) + 0.17 * family_index) % 1.0
+                    h_u_ru = ((row_in_family * 0.4142135623730950) + 0.29 * family_index) % 1.0
+                    gnb_z = _sample_height(spec.gnb_height_min_m, spec.gnb_height_max_m, h_u_br, d_br)
+                    ue_z = _sample_height(spec.ue_height_min_m, spec.ue_height_max_m, h_u_ru, d_ru)
+                    phase = split_phase[split]
+                    az_br = (phase_br + row_in_family * golden + phase) % (2.0 * math.pi)
+                    az_ru = (phase_ru - row_in_family * golden * 0.754877666 + 1.7 * phase) % (2.0 * math.pi)
+                    gnb = _xyz_from_distance_height(d_br, gnb_z, az_br)
+                    ue = _xyz_from_distance_height(d_ru, ue_z, az_ru)
+
+                    raw_rows.append({
+                        "family": family,
+                        "split": split,
+                        "splitID": split,
+                        "geometry_cell_id": cell_id,
+                        "br_distance_bin": br_bin,
+                        "ru_distance_bin": ru_bin,
+                        "u_BR": u_br,
+                        "u_RU": u_ru,
+                        "ris_x": 0.0, "ris_y": 0.0, "ris_z": 0.0,
+                        "gnb_x": gnb[0], "gnb_y": gnb[1], "gnb_z": gnb[2],
+                        "ue_x": ue[0], "ue_y": ue[1], "ue_z": ue[2],
+                        "dist_BR": d_br,
+                        "dist_RU": d_ru,
+                        "eta": d_br / (d_br + d_ru),
+                    })
+                    row_in_family += 1
+
+    df = pd.DataFrame(raw_rows)
+    if len(df) != requested:
+        raise RuntimeError(f"{family}: generated {len(df)} rows, expected {requested}.")
+
+    states = np.empty(len(df), dtype=object)
+    for split in split_names:
+        idx = np.flatnonzero(df["split"].to_numpy() == split)
+        states[idx] = _balanced_four_state_for_split(
+            split, len(idx), family_index, rng
+        )
+    df["link_state"] = states
+    suffixes = [STATE_TO_SUFFIX[s] for s in df["link_state"]]
+    df["scenario_BR"] = [f"{family}-{x[0]}" for x in suffixes]
+    df["scenario_RU"] = [f"{family}-{x[1]}" for x in suffixes]
+
+    nris_vals = [int(x) for x in cfg["arrays"]["nRIS_values"]]
+    nris = _balanced_scalars(len(df), nris_vals, rng).astype(int)
+    df["nRIS"] = nris
+    shapes = np.asarray([_canonical_nris_shape(x) for x in nris], dtype=int)
+    df["nRIS_x"], df["nRIS_y"] = shapes[:, 0], shapes[:, 1]
+    df["nRIS1"], df["nRIS2"] = df["nRIS_x"], df["nRIS_y"]
+
+    tx = np.asarray(
+        _balanced_shapes(len(df), cfg["arrays"]["tx_spatial_shapes"], rng),
+        dtype=int,
+    )
+    rx = np.asarray(
+        _balanced_shapes(len(df), cfg["arrays"]["rx_spatial_shapes"], rng),
+        dtype=int,
+    )
+    df["nT1"], df["nT2"] = tx[:, 0], tx[:, 1]
+    df["nT"] = 2 * df["nT1"] * df["nT2"]
+    df["nR1"], df["nR2"] = rx[:, 0], rx[:, 1]
+    df["nR"] = 2 * df["nR1"] * df["nR2"]
+    freqs = [float(x) for x in cfg["carrier_frequencies_hz"]]
+    df["fc"] = _balanced_scalars(len(df), freqs, rng).astype(float)
+    return df
+
+
 def generate_environment_dataframe(cfg: Mapping[str, Any]) -> pd.DataFrame:
     seed = int(cfg["seed"])
     specs = _family_specs(cfg)
@@ -295,8 +473,6 @@ def generate_environment_dataframe(cfg: Mapping[str, Any]) -> pd.DataFrame:
     for family_index, (family, requested) in enumerate(
         cfg["environments"]["scenario_families"].items()
     ):
-        if int(requested) != 1000:
-            raise ValueError("Current controlled design requires exactly 1000 banks/family.")
         frames.append(
             _make_family_rows(
                 str(family), family_index, cfg, specs[str(family)], seed
@@ -318,6 +494,9 @@ def generate_environment_dataframe(cfg: Mapping[str, Any]) -> pd.DataFrame:
     df["ris_seed"] = ris_rng.integers(
         1, np.iinfo(np.uint32).max, size=len(df), dtype=np.uint32
     ).astype(np.uint64)
+    df["channel_model"] = str(
+        cfg.get("channel_model", "case2_shared_ray_polarization_phases")
+    )
 
     cols = [
         "bankID", "index", "split", "splitID",
@@ -332,7 +511,7 @@ def generate_environment_dataframe(cfg: Mapping[str, Any]) -> pd.DataFrame:
         "nT1", "nT2", "nT",
         "nR1", "nR2", "nR",
         "nRIS_x", "nRIS_y", "nRIS1", "nRIS2", "nRIS",
-        "channel_seed", "ris_seed",
+        "channel_seed", "ris_seed", "channel_model",
     ]
     df = df[cols]
     validate_environment_dataframe(df, cfg, strict=True)
@@ -370,10 +549,19 @@ def validate_environment_dataframe(df, cfg, strict=True):
     for family, g in df.groupby("family"):
         vc = g["link_state"].value_counts().to_dict()
         for state in LINK_STATES:
-            if vc.get(state, 0) != 250:
-                errors.append(f"{family}: {state} count={vc.get(state,0)} expected=250")
+            expected_state = len(g) // len(LINK_STATES)
+            if vc.get(state, 0) != expected_state:
+                errors.append(
+                    f"{family}: {state} count={vc.get(state,0)} "
+                    f"expected={expected_state}"
+                )
 
-    expected_nris = {int(x): 1000 for x in cfg["arrays"]["nRIS_values"]}
+    nris_values = [int(x) for x in cfg["arrays"]["nRIS_values"]]
+    q, r = divmod(len(df), len(nris_values))
+    expected_nris = {
+        x: q + (1 if i < r else 0)
+        for i, x in enumerate(nris_values)
+    }
     got_nris = df["nRIS"].value_counts().sort_index().to_dict()
     if got_nris != expected_nris:
         errors.append(f"nRIS counts {got_nris} != {expected_nris}")

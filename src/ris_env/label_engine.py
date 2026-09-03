@@ -988,6 +988,12 @@ def flatten_label_result(
 
     widx=WIdx.detach().cpu().numpy()
     zcpu=z.detach().cpu().numpy().astype(np.int8)
+    if zcpu.ndim not in (2, 3):
+        raise ValueError("z must be shared [C,nRIS] or paired [K,C,nRIS].")
+    if zcpu.ndim == 3 and zcpu.shape[:2] != (K, C):
+        raise ValueError(
+            f"paired z shape={zcpu.shape}, expected leading dims={(K, C)}."
+        )
 
     mu=result["muSNR"].detach().cpu().numpy()
     mean=result["meanEmp"].detach().cpu().numpy()
@@ -1007,7 +1013,10 @@ def flatten_label_result(
                 "WIdx_i11":int(widx[k,0]),
                 "WIdx_i12":int(widx[k,1]),
                 "WIdx_i2":int(widx[k,2]),
-                "zString":"".join(str(int(x)) for x in zcpu[c]),
+                "zString":"".join(
+                    str(int(x))
+                    for x in (zcpu[c] if zcpu.ndim == 2 else zcpu[k, c])
+                ),
                 "muSNR":float(mu[k,c]),
                 "meanEmp":float(mean[k,c]),
                 "varEmp":float(var[k,c]),

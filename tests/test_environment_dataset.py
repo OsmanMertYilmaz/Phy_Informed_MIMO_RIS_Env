@@ -30,3 +30,30 @@ def test_controlled_4000_environment_design():
     assert report["pass"], report["errors"]
     assert report["exact_geometry_overlap_across_splits"] == 0
     assert report["interpolation_failures"] == 0
+
+
+def test_controlled_27200_environment_design():
+    root = Path(__file__).resolve().parents[1]
+    cfg = load_dataset_config(root / "configs/variance_ratio_dataset_27200.yaml")
+    df = generate_environment_dataframe(cfg)
+
+    assert len(df) == 27200
+    assert df["split"].value_counts().to_dict() == {
+        "train": 19040,
+        "validation": 4080,
+        "final_test": 4080,
+    }
+    assert df["family"].value_counts().to_dict() == {
+        "Indoor-Office": 6800,
+        "UMi": 6800,
+        "UMa": 6800,
+        "RMa": 6800,
+    }
+    assert df["nRIS"].value_counts().sort_index().to_dict() == {
+        64: 6800, 128: 6800, 256: 6800, 512: 6800,
+    }
+
+    report = validate_environment_dataframe(df, cfg, strict=False)
+    assert report["pass"], report["errors"]
+    assert report["exact_geometry_overlap_across_splits"] == 0
+    assert report["interpolation_failures"] == 0

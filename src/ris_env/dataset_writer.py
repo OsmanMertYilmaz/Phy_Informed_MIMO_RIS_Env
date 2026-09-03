@@ -1,5 +1,5 @@
 """
-Resumable/sharded writer utilities for the full 4,000-bank teacher dataset.
+Resumable/sharded writer utilities for production teacher datasets.
 
 Design goals
 ------------
@@ -28,6 +28,7 @@ import pandas as pd
 
 
 DATASET_SCHEMA_VERSION = "teacher_q05gg_v5"
+VARIANCE_RATIO_SCHEMA_VERSION = "teacher_variance_ratio_v1"
 ANALYTIC_MEAN_VERSION = "stage3_clamped_second_moment_v2"
 
 
@@ -59,13 +60,18 @@ def make_generation_spec(
     z_chunk: int,
     banks_per_shard: int,
     gg_lookup_sha256: str,
+    candidate_design: str = "legacy_q05gg_v5",
+    optimization_sweeps: int | None = None,
 ) -> Dict[str, Any]:
 
     environment_csv = Path(environment_csv)
 
     spec = {
-        "schema_version":
-            DATASET_SCHEMA_VERSION,
+        "schema_version": (
+            VARIANCE_RATIO_SCHEMA_VERSION
+            if candidate_design == "variance_ratio_v1"
+            else DATASET_SCHEMA_VERSION
+        ),
 
         "environment_csv_name":
             environment_csv.name,
@@ -104,6 +110,12 @@ def make_generation_spec(
         "analytic_mean_version":
             ANALYTIC_MEAN_VERSION,
 
+        "candidate_design": str(candidate_design),
+
+        "optimization_sweeps": (
+            None if optimization_sweeps is None else int(optimization_sweeps)
+        ),
+
         # ----------------------------------------------------
         # Frozen Adaptive-MC policy
         # ----------------------------------------------------
@@ -134,11 +146,13 @@ def make_generation_spec(
         # ----------------------------------------------------
         # Teacher target
         # ----------------------------------------------------
-        "target":
-            "logQ05GG",
+        "target": (
+            "targetLogVarRatio"
+            if candidate_design == "variance_ratio_v1"
+            else "logQ05GG"
+        ),
 
-        "target_representation":
-            "direct_log_domain",
+        "target_representation": "direct_log_domain",
 
         "q05_definition":
             "symmetric_gamma_gamma(meanEmp_MC,varEmp_MC)",
@@ -233,7 +247,9 @@ def load_or_create_manifest(
         return manifest
 
     manifest = {
-        "dataset_schema_version": DATASET_SCHEMA_VERSION,
+        "dataset_schema_version": generation_spec.get(
+            "schema_version", DATASET_SCHEMA_VERSION
+        ),
         "created_unix": time.time(),
         "updated_unix": time.time(),
         "generation_spec": dict(generation_spec),
@@ -349,8 +365,7 @@ def standardize_teacher_bank_frame(
     """
     Final per-bank Parquet schema.
 
-    Teacher target:
-        logQ05GG
+    Supports the legacy logQ05GG target and the frozen variance-ratio target.
 
     Adaptive Teacher rows contain variable MC budgets.
     Therefore empirical target-side moments are stored as:
@@ -375,27 +390,13 @@ def standardize_teacher_bank_frame(
     )
 
 
-    # ========================================================
-    # Direct-log target must already exist.
-    # NEVER reconstruct it from q05GG.
-    # ========================================================
-
-    if "logQ05GG" not in out.columns:
-        raise ValueError(
-            "Teacher labels must contain direct logQ05GG "
-            "from the GG engine."
-        )
-
-    logq = out[
-        "logQ05GG"
-    ].to_numpy(
-        np.float64
-    )
-
-    if not np.isfinite(logq).all():
-        raise ValueError(
-            "Teacher labels contain non-finite logQ05GG."
-        )
+    variance_ratio = "targetLogVarRatio" in out.columns
+    target_name = "targetLogVarRatio" if variance_ratio else "logQ05GG"
+    if target_name not in out.columns:
+        raise ValueError(f"Teacher labels missing target {target_name}.")
+    target_values = out[target_name].to_numpy(np.float64)
+    if not np.isfinite(target_values).all():
+        raise ValueError(f"Teacher labels contain non-finite {target_name}.")
 
 
     # ========================================================
@@ -436,6 +437,57 @@ def standardize_teacher_bank_frame(
             }
         )
 
+        if variance_ratio:
+            required_vr = {
+                "sigma2Wick", "wickCV2", "Neff", "varRatio",
+                "targetIdentityError", "analyticValid", "isReliable",
+                "canonicalSplit", "isOptimized", "isDuplicate",
+            }
+            missing_vr = required_vr - set(out.columns)
+            if missing_vr:
+                raise ValueError(
+                    "Variance-ratio Teacher labels missing columns: "
+                    f"{sorted(missing_vr)}"
+                )
+
+            canonical_train = out["canonicalSplit"].astype(str).eq("train")
+            train_counts = (
+                out.loc[canonical_train]
+                .groupby("wCandidate", sort=True)
+                .size()
+            )
+            if len(train_counts) != 32 or not (train_counts == 336).all():
+                raise ValueError(
+                    "Hierarchical targets require exactly 336 canonical-train "
+                    "Z rows for each of 32 W candidates."
+                )
+
+            train_rows = out.loc[
+                canonical_train, ["wCandidate", "targetLogVarRatio"]
+            ]
+            w_mean = train_rows.groupby("wCandidate")["targetLogVarRatio"].mean()
+            w_std = train_rows.groupby("wCandidate")["targetLogVarRatio"].std(ddof=0)
+            bank_mean = float(train_rows["targetLogVarRatio"].mean())
+            bank_std = float(train_rows["targetLogVarRatio"].std(ddof=0))
+            mapped_mean = out["wCandidate"].map(w_mean).to_numpy(np.float64)
+            mapped_std = out["wCandidate"].map(w_std).to_numpy(np.float64)
+            out["targetBankMean"] = bank_mean
+            out["targetBankStd"] = bank_std
+            out["targetWMean"] = mapped_mean
+            out["targetWStd"] = mapped_std
+            out["targetDeltaW"] = mapped_mean - bank_mean
+            out["targetDeltaZ"] = (
+                out["targetLogVarRatio"].to_numpy(np.float64) - mapped_mean
+            )
+            reconstructed = (
+                out["targetBankMean"].to_numpy(np.float64)
+                + out["targetDeltaW"].to_numpy(np.float64)
+                + out["targetDeltaZ"].to_numpy(np.float64)
+            )
+            out["hierarchyIdentityError"] = np.abs(
+                out["targetLogVarRatio"].to_numpy(np.float64) - reconstructed
+            )
+
 
         n_used = out[
             "N_MC_used"
@@ -471,6 +523,13 @@ def standardize_teacher_bank_frame(
             "candidateType",
             "anchorIndex",
 
+            "canonicalSplit",
+            "isOptimized",
+            "optimizationObjective",
+            "optimizationSeedRank",
+            "optimizationSweepCount",
+            "isDuplicate",
+
             "N_MC_base",
         ]
 
@@ -495,6 +554,22 @@ def standardize_teacher_bank_frame(
             "logQ05GG",
             "lookupClamped",
         ]
+
+        if variance_ratio:
+            target_tail = [
+                "muSNR", "sigma2Wick", "wickCV2", "Neff",
+                "meanEmpMC", "varEmpMC", "N_MC_used",
+                "mcRefined", "mcConverged", "mcEarlyP99",
+                "mcFinalP90Delta", "analyticValid", "isReliable",
+                "targetIdentityError", "hierarchyIdentityError",
+                "optimizationInitialObjective", "optimizationFinalObjective",
+                "optimizationAcceptedFlips",
+                "targetBankMean", "targetBankStd",
+                "targetWMean", "targetWStd",
+                "targetDeltaW", "targetDeltaZ",
+                "varRatio", "targetLogVarRatio",
+                "cv2", "ggShapeA", "q05GG", "logQ05GG", "lookupClamped",
+            ]
 
 
     # ========================================================

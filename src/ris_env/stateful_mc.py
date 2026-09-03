@@ -120,13 +120,20 @@ def create_stateful_mc(
             "W must be [K,nT]."
         )
 
-    if gamma.ndim != 2:
+    if gamma.ndim not in (2, 3):
         raise ValueError(
-            "gamma must be [C,nRIS]."
+            "gamma must be shared [C,nRIS] or paired [K,C,nRIS]."
         )
 
     Knum, nT = W.shape
-    C, nRIS = gamma.shape
+    if gamma.ndim == 2:
+        C, nRIS = gamma.shape
+    else:
+        Kgamma, C, nRIS = gamma.shape
+        if Kgamma != Knum:
+            raise ValueError(
+                f"paired gamma K={Kgamma}, expected W K={Knum}."
+            )
 
     expected_nT = (
         2
@@ -270,9 +277,7 @@ def advance_stateful_mc(
         W.shape[0]
     )
 
-    C = int(
-        gamma.shape[0]
-    )
+    C = int(gamma.shape[0] if gamma.ndim == 2 else gamma.shape[1])
 
 
     if dev.type == "cuda":
@@ -371,11 +376,10 @@ def advance_stateful_mc(
             )
 
 
-            basis_flat = basis.reshape(
-                N
-                * (k1-k0)
-                * R,
-                I,
+            basis_flat = (
+                basis.reshape(N * (k1-k0) * R, I)
+                if gamma.ndim == 2
+                else None
             )
 
 
@@ -390,20 +394,14 @@ def advance_stateful_mc(
                     C,
                 )
 
-                gc = gamma[
-                    c0:c1
-                ]
-
-
-                eff = (
-                    basis_flat
-                    @ gc.T
-                ).reshape(
-                    N,
-                    k1-k0,
-                    R,
-                    c1-c0,
-                )
+                if gamma.ndim == 2:
+                    gc = gamma[c0:c1]
+                    eff = (basis_flat @ gc.T).reshape(
+                        N, k1-k0, R, c1-c0
+                    )
+                else:
+                    gc = gamma[k0:k1, c0:c1, :]
+                    eff = torch.einsum("nkri,kci->nkrc", basis, gc)
 
 
                 Y = torch.sum(
@@ -442,7 +440,8 @@ def advance_stateful_mc(
 
             del u
             del basis
-            del basis_flat
+            if basis_flat is not None:
+                del basis_flat
 
 
         del HBR
