@@ -221,6 +221,12 @@ def main():
             remaining_budget = int(args.max_banks) - processed_this_run
             if remaining_budget <= 0:
                 break
+            if len(planned_ids) > remaining_budget:
+                print(
+                    f"Stopping before {plan['filename']}: --max-banks budget "
+                    "would split an atomic shard."
+                )
+                break
 
         if args.target_completed_banks is not None:
             remaining_total = (
@@ -232,12 +238,6 @@ def main():
             if len(planned_ids) > remaining_total:
                 print(
                     f"Stopping before {plan['filename']}: absolute pilot target "
-                    "would split an atomic shard."
-                )
-                break
-            if len(planned_ids) > remaining_budget:
-                print(
-                    f"Stopping before {plan['filename']}: --max-banks budget "
                     "would split an atomic shard."
                 )
                 break
