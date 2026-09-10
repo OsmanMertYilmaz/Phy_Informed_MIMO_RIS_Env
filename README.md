@@ -81,6 +81,12 @@ patterns, structured 2-D patterns, and local Hamming perturbations.
 
 ## Reproducibility
 
+For an independent check of the correlation/precoder formula against a
+four-index reference and native channel Monte Carlo, see
+[Correlation Monte Carlo](docs/CORRELATION_MC.md) and
+[the Colab notebook](notebooks/validation/correlation_monte_carlo.ipynb).
+This reports channel variance separately from the power-variance/Wick gap.
+
 Historical parity notebooks and MATLAB exporters are kept under
 `notebooks/validation/` and `tests/matlab_golden/exporters/`. These are
 validation provenance, not production APIs.
