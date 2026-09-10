@@ -428,6 +428,10 @@ class MeanOnlyWState:
     eff_kernel: torch.Tensor  # [nR,nRIS,nRIS]
     ubarBR: torch.Tensor      # [nRIS]
     muRU: torch.Tensor        # [nR,nRIS]
+    # Optional because a few historical/unit-test call sites construct this
+    # compact state positionally.  Production preparation populates it and
+    # the analytic z-channel feature extractor uses its element profile.
+    UBR: Optional[torch.Tensor] = None  # [nRIS,nRIS]
 
 
 def _hermitianize(A: torch.Tensor) -> torch.Tensor:
@@ -498,6 +502,7 @@ def prepare_w_mean_only_state(static_env, w) -> MeanOnlyWState:
         eff_kernel=eff_kernel,
         ubarBR=ubar,
         muRU=env.muRU,
+        UBR=UBR,
     )
 
 
