@@ -1,0 +1,206 @@
+{
+  "base_commit": "5148523a4e1d225d25191d4a9aa73fe7a72fe9ca",
+  "command": "python scripts/validate_correlation_mc.py --nris 8 32 --n-mc 8192 --mc-chunk 128 --device cpu --output outputs/correlation_mc_cpu",
+  "manifest": {
+    "banks": [
+      {
+        "scenario_br": "Indoor-Office-LOS",
+        "scenario_ru": "Indoor-Office-LOS",
+        "fc": 3500000000.0,
+        "ris": [
+          0,
+          0,
+          3
+        ],
+        "gnb": [
+          -10,
+          2,
+          3
+        ],
+        "ue": [
+          8,
+          3,
+          1.5
+        ],
+        "nT1": 2,
+        "nT2": 1,
+        "nR1": 2,
+        "nR2": 1,
+        "nRIS_x": 2,
+        "nRIS_y": 2,
+        "WIdx": [
+          1,
+          1,
+          2
+        ]
+      },
+      {
+        "scenario_br": "Indoor-Office-NLOS",
+        "scenario_ru": "Indoor-Office-NLOS",
+        "fc": 3500000000.0,
+        "ris": [
+          0,
+          0,
+          3
+        ],
+        "gnb": [
+          -10,
+          2,
+          3
+        ],
+        "ue": [
+          8,
+          3,
+          1.5
+        ],
+        "nT1": 2,
+        "nT2": 1,
+        "nR1": 2,
+        "nR2": 1,
+        "nRIS_x": 2,
+        "nRIS_y": 2,
+        "WIdx": [
+          1,
+          1,
+          2
+        ]
+      },
+      {
+        "scenario_br": "Indoor-Office-LOS",
+        "scenario_ru": "Indoor-Office-LOS",
+        "fc": 3500000000.0,
+        "ris": [
+          0,
+          0,
+          3
+        ],
+        "gnb": [
+          -10,
+          2,
+          3
+        ],
+        "ue": [
+          8,
+          3,
+          1.5
+        ],
+        "nT1": 2,
+        "nT2": 1,
+        "nR1": 2,
+        "nR2": 1,
+        "nRIS_x": 4,
+        "nRIS_y": 4,
+        "WIdx": [
+          1,
+          1,
+          2
+        ]
+      },
+      {
+        "scenario_br": "Indoor-Office-NLOS",
+        "scenario_ru": "Indoor-Office-NLOS",
+        "fc": 3500000000.0,
+        "ris": [
+          0,
+          0,
+          3
+        ],
+        "gnb": [
+          -10,
+          2,
+          3
+        ],
+        "ue": [
+          8,
+          3,
+          1.5
+        ],
+        "nT1": 2,
+        "nT2": 1,
+        "nR1": 2,
+        "nR2": 1,
+        "nRIS_x": 4,
+        "nRIS_y": 4,
+        "WIdx": [
+          1,
+          1,
+          2
+        ]
+      }
+    ],
+    "n_mc": 8192,
+    "mc_chunk": 128,
+    "patterns": 4,
+    "seed": 20260910,
+    "checkpoints": [
+      1024,
+      4096,
+      16384,
+      32768
+    ],
+    "device": "cpu",
+    "parity": true,
+    "cpu_threads": 1,
+    "torch_version": "2.14.0+cpu",
+    "source_sha256": "506925d5ea8e6542f614d0113687e30565ea9a7ec74d826b4645c2fc50c4e9f8"
+  },
+  "tests": {
+    "command": "python -m pytest -q",
+    "passed": 30
+  },
+  "banks": [
+    {
+      "bank": 0,
+      "nRIS": 8,
+      "scenario": "Indoor-Office-LOS",
+      "n_mc": 8192,
+      "candidates": 4,
+      "channel_variance_median_error_pct": 1.093630399875285,
+      "channel_variance_max_error_pct": 2.88180675111428,
+      "centered_residual_max_abs_se": 2.4735659240899888,
+      "wick_power_underestimate_median_pct": 25.603267069445206
+    },
+    {
+      "bank": 1,
+      "nRIS": 8,
+      "scenario": "Indoor-Office-NLOS",
+      "n_mc": 8192,
+      "candidates": 4,
+      "channel_variance_median_error_pct": 1.85978749724975,
+      "channel_variance_max_error_pct": 4.29455267851451,
+      "centered_residual_max_abs_se": 3.025718224250369,
+      "wick_power_underestimate_median_pct": 61.517032879618064
+    },
+    {
+      "bank": 2,
+      "nRIS": 32,
+      "scenario": "Indoor-Office-LOS",
+      "n_mc": 8192,
+      "candidates": 4,
+      "channel_variance_median_error_pct": 0.330328770510425,
+      "channel_variance_max_error_pct": 0.94572991779836,
+      "centered_residual_max_abs_se": 0.7076490074518769,
+      "wick_power_underestimate_median_pct": 33.98030389398365
+    },
+    {
+      "bank": 3,
+      "nRIS": 32,
+      "scenario": "Indoor-Office-NLOS",
+      "n_mc": 8192,
+      "candidates": 4,
+      "channel_variance_median_error_pct": 1.7583589967355948,
+      "channel_variance_max_error_pct": 4.26885762025565,
+      "centered_residual_max_abs_se": 2.980790420457349,
+      "wick_power_underestimate_median_pct": 59.4155590393761
+    }
+  ],
+  "max_four_sum_variance_rel_error": 6.2141887174882895e-16,
+  "max_production_variance_rel_error": 7.692455295859204e-16,
+  "max_sample_composition_rel_error": 5.799446923751492e-16,
+  "limitations": [
+    "CPU only; CUDA path not executed here",
+    "8/32 RIS ports only; 128/512 remain notebook experiments",
+    "Monte Carlo discrepancy includes sampling and angular approximation error",
+    "Native power variance is compared with Wick, not replaced by the Gaussian scalar formula"
+  ]
+}
